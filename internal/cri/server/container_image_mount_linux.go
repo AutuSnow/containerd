@@ -19,11 +19,13 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/containerd/containerd/v2/core/mount"
+	"github.com/containerd/containerd/v2/core/snapshots"
 	kernel "github.com/containerd/containerd/v2/pkg/kernelversion"
 )
 
@@ -89,4 +91,29 @@ func ensureImageVolumeMounted(target string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// getImageVolumeSnapshotOpts returns snapshot options with user namespace idmap labels
+// if the sandbox is configured to use user namespaces. This ensures that image volumes
+// work correctly with user namespaces by applying idmap to the overlay lower layers.
+func (c *criService) getImageVolumeSnapshotOpts(ctx context.Context, sandboxID string) ([]snapshots.Opt, error) {
+	// Get the sandbox configuration
+	sandbox, err := c.sandboxStore.Get(sandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sandbox %q: %w", sandboxID, err)
+	}
+
+	// Check if the sandbox has Linux security context configured
+	if sandbox.Config.GetLinux() == nil {
+		return nil, nil
+	}
+
+	// Get namespace options and create idmap labels if user namespace is enabled
+	nsOpts := sandbox.Config.GetLinux().GetSecurityContext().GetNamespaceOptions()
+	snapshotOpts, err := snapshotterRemapOpts(nsOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get snapshotter remap options: %w", err)
+	}
+
+	return snapshotOpts, nil
 }
