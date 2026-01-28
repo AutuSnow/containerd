@@ -324,3 +324,63 @@ func TestImageVolumeSetupIfContainerdRestarts(t *testing.T) {
 		})
 	}
 }
+
+func TestImageVolumeWithUserNamespace(t *testing.T) {
+	// Check if user namespace and idmap are supported
+	if !supportsUserNS() {
+		t.Skip("user namespace not supported")
+	}
+	tempDir := t.TempDir()
+	if !supportsIDMap(tempDir) {
+		t.Skip("idmap mounts not supported")
+	}
+
+	containerID := uint32(0)
+	hostID := uint32(65536)
+	size := uint32(65536)
+
+	containerImage := images.Get(images.Alpine)
+	imageVolumeImage := images.Get(images.Pause)
+
+	// Create a pod with user namespace enabled
+	podLogDir := t.TempDir()
+	podOpts := []PodSandboxOpts{
+		WithPodLogDirectory(podLogDir),
+		WithPodUserNs(containerID, hostID, size),
+	}
+	podCtx := newPodTCtx(t, runtimeService, t.Name(), "image-volume-userns", podOpts...)
+	defer podCtx.stop(true)
+
+	pullImagesByCRI(t, imageService, containerImage, imageVolumeImage)
+
+	// Create a container with image volume mount
+	containerName := "test-container"
+	cfg := ContainerConfig(containerName, containerImage,
+		WithCommand("sleep", "1d"),
+		WithImageVolumeMount(imageVolumeImage, "", "/image-mount"),
+		WithLogPath(containerName),
+		WithUserNamespace(containerID, hostID, size),
+	)
+	cnID, err := podCtx.rSvc.CreateContainer(podCtx.id, cfg, podCtx.cfg)
+	require.NoError(t, err, "failed to create container with image volume and user namespace")
+
+	require.NoError(t, podCtx.rSvc.StartContainer(cnID), "failed to start container")
+
+	// Verify that the image volume is accessible
+	stdout, stderr, err := runtimeService.ExecSync(cnID, []string{"ls", "/image-mount/pause"}, 0)
+	require.NoError(t, err, "failed to access image volume")
+	require.Len(t, stderr, 0)
+	require.Contains(t, string(stdout), "pause", "image volume should contain pause binary")
+
+	// Verify that the image volume is read-only
+	_, _, err = runtimeService.ExecSync(cnID, []string{"rm", "/image-mount/pause"}, 0)
+	require.Error(t, err, "image volume should be read-only")
+	require.Contains(t, err.Error(), "Read-only file system", "error should indicate read-only filesystem")
+
+	// Verify file ownership is correctly mapped
+	// In the container's user namespace, files should appear as owned by root (UID 0)
+	stdout, stderr, err = runtimeService.ExecSync(cnID, []string{"stat", "-c", "%u:%g", "/image-mount/pause"}, 0)
+	require.NoError(t, err, "failed to stat file in image volume")
+	require.Len(t, stderr, 0)
+	require.Contains(t, string(stdout), "0:0", "files in image volume should appear as owned by root in container's user namespace")
+}

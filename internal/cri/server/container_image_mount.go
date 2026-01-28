@@ -124,10 +124,19 @@ func (c *criService) mutateImageMount(
 		}
 		chainID := identity.ChainID(diffIDs).String()
 
+		// Get snapshot options with user namespace idmap labels if needed
+		snapshotOpts, err := c.getImageVolumeSnapshotOpts(ctx, sandboxID)
+		if err != nil {
+			return fmt.Errorf("failed to get snapshot options for image volume: %w", err)
+		}
+
 		s := c.client.SnapshotService(snapshotter)
-		mounts, err := s.Prepare(ctx, target, chainID)
+		mounts, err := s.Prepare(ctx, target, chainID, snapshotOpts...)
 		if err != nil {
 			if errdefs.IsAlreadyExists(err) {
+				// Snapshot already exists (e.g., from another container in the same pod).
+				// Trust that it was created with the correct idmap configuration since
+				// all containers in a pod share the same user namespace configuration.
 				mounts, err = s.Mounts(ctx, target)
 			}
 		}

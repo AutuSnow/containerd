@@ -19,10 +19,12 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/containerd/containerd/v2/core/mount"
+	"github.com/containerd/containerd/v2/core/snapshots"
 )
 
 // addVolatileOptionOnImageVolumeMount is no-op on non-linux platforms.
@@ -41,4 +43,10 @@ func ensureImageVolumeMounted(target string) (bool, error) {
 		return false, fmt.Errorf("failed to stat %s: %w", target, err)
 	}
 	return true, nil
+}
+
+// getImageVolumeSnapshotOpts is no-op on non-linux platforms.
+func (c *criService) getImageVolumeSnapshotOpts(ctx context.Context, sandboxID string) ([]snapshots.Opt, error) {
+	// User namespaces are only supported on Linux
+	return nil, nil
 }
