@@ -23,49 +23,33 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
-
-	"github.com/containerd/containerd/v2/internal/cri/store/label"
-	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
 )
 
 func TestGetImageVolumeSnapshotOpts(t *testing.T) {
 	ctx := context.Background()
 
 	for _, test := range []struct {
-		name          string
-		sandboxConfig *runtime.PodSandboxConfig
-		expectOpts    bool
-		expectError   bool
+		name        string
+		mount       *runtime.Mount
+		expectOpts  bool
+		expectError bool
 	}{
 		{
-			name: "with user namespace enabled",
-			sandboxConfig: &runtime.PodSandboxConfig{
-				Metadata: &runtime.PodSandboxMetadata{
-					Name:      "test-sandbox",
-					Uid:       "test-uid",
-					Namespace: "test-ns",
+			name: "with user namespace mappings",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
+					},
 				},
-				Linux: &runtime.LinuxPodSandboxConfig{
-					SecurityContext: &runtime.LinuxSandboxSecurityContext{
-						NamespaceOptions: &runtime.NamespaceOption{
-							UsernsOptions: &runtime.UserNamespace{
-								Mode: runtime.NamespaceMode_POD,
-								Uids: []*runtime.IDMapping{
-									{
-										ContainerId: 0,
-										HostId:      65536,
-										Length:      65536,
-									},
-								},
-								Gids: []*runtime.IDMapping{
-									{
-										ContainerId: 0,
-										HostId:      65536,
-										Length:      65536,
-									},
-								},
-							},
-						},
+				GidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
 					},
 				},
 			},
@@ -73,20 +57,23 @@ func TestGetImageVolumeSnapshotOpts(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "without user namespace",
-			sandboxConfig: &runtime.PodSandboxConfig{
-				Metadata: &runtime.PodSandboxMetadata{
-					Name:      "test-sandbox",
-					Uid:       "test-uid",
-					Namespace: "test-ns",
-				},
-				Linux: &runtime.LinuxPodSandboxConfig{
-					SecurityContext: &runtime.LinuxSandboxSecurityContext{
-						NamespaceOptions: &runtime.NamespaceOption{
-							UsernsOptions: &runtime.UserNamespace{
-								Mode: runtime.NamespaceMode_NODE,
-							},
-						},
+			name: "without user namespace mappings",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+			},
+			expectOpts:  false,
+			expectError: false,
+		},
+		{
+			name: "with nil UID mappings",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings:   nil,
+				GidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
 					},
 				},
 			},
@@ -94,29 +81,31 @@ func TestGetImageVolumeSnapshotOpts(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "with nil Linux config",
-			sandboxConfig: &runtime.PodSandboxConfig{
-				Metadata: &runtime.PodSandboxMetadata{
-					Name:      "test-sandbox",
-					Uid:       "test-uid",
-					Namespace: "test-ns",
+			name: "with nil GID mappings",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
+					},
 				},
-				Linux: nil,
+				GidMappings: nil,
 			},
 			expectOpts:  false,
 			expectError: false,
 		},
 		{
-			name: "with nil namespace options",
-			sandboxConfig: &runtime.PodSandboxConfig{
-				Metadata: &runtime.PodSandboxMetadata{
-					Name:      "test-sandbox",
-					Uid:       "test-uid",
-					Namespace: "test-ns",
-				},
-				Linux: &runtime.LinuxPodSandboxConfig{
-					SecurityContext: &runtime.LinuxSandboxSecurityContext{
-						NamespaceOptions: nil,
+			name: "with empty UID mappings",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings:   []*runtime.IDMapping{},
+				GidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
 					},
 				},
 			},
@@ -124,45 +113,75 @@ func TestGetImageVolumeSnapshotOpts(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "with nil userns options",
-			sandboxConfig: &runtime.PodSandboxConfig{
-				Metadata: &runtime.PodSandboxMetadata{
-					Name:      "test-sandbox",
-					Uid:       "test-uid",
-					Namespace: "test-ns",
+			name: "with empty GID mappings",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
+					},
 				},
-				Linux: &runtime.LinuxPodSandboxConfig{
-					SecurityContext: &runtime.LinuxSandboxSecurityContext{
-						NamespaceOptions: &runtime.NamespaceOption{
-							UsernsOptions: nil,
-						},
+				GidMappings: []*runtime.IDMapping{},
+			},
+			expectOpts:  false,
+			expectError: false,
+		},
+		{
+			name: "with multiple UID mappings (should error)",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      32768,
+					},
+					{
+						ContainerId: 32768,
+						HostId:      98304,
+						Length:      32768,
+					},
+				},
+				GidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
 					},
 				},
 			},
 			expectOpts:  false,
-			expectError: false,
+			expectError: true,
+		},
+		{
+			name: "with invalid UID mapping length (should error)",
+			mount: &runtime.Mount{
+				ContainerPath: "/data",
+				UidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      0, // Invalid length
+					},
+				},
+				GidMappings: []*runtime.IDMapping{
+					{
+						ContainerId: 0,
+						HostId:      65536,
+						Length:      65536,
+					},
+				},
+			},
+			expectOpts:  false,
+			expectError: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			// Create a test CRI service with a sandbox store
-			labels := label.NewStore()
-			c := &criService{
-				sandboxStore: sandboxstore.NewStore(labels, nil),
-			}
+			c := &criService{}
 
-			// Create and add a sandbox to the store
-			sandboxID := "test-sandbox-id"
-			sandbox := sandboxstore.NewSandbox(
-				sandboxstore.Metadata{
-					ID:     sandboxID,
-					Name:   test.sandboxConfig.Metadata.Name,
-					Config: test.sandboxConfig,
-				},
-				sandboxstore.Status{},
-			)
-			c.sandboxStore.Add(sandbox)
-
-			opts, err := c.getImageVolumeSnapshotOpts(ctx, sandboxID)
+			opts, err := c.getImageVolumeSnapshotOpts(ctx, test.mount)
 
 			if test.expectError {
 				assert.Error(t, err)
@@ -177,61 +196,4 @@ func TestGetImageVolumeSnapshotOpts(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGetImageVolumeSnapshotOpts_SandboxNotFound(t *testing.T) {
-	ctx := context.Background()
-
-	labels := label.NewStore()
-	c := &criService{
-		sandboxStore: sandboxstore.NewStore(labels, nil),
-	}
-
-	// Try to get options for a non-existent sandbox
-	_, err := c.getImageVolumeSnapshotOpts(ctx, "non-existent-sandbox")
-	assert.Error(t, err, "expected error when sandbox not found")
-	assert.Contains(t, err.Error(), "failed to get sandbox", "error should mention sandbox not found")
-}
-
-func TestGetImageVolumeSnapshotOpts_InvalidUserNamespace(t *testing.T) {
-	ctx := context.Background()
-
-	// Test with invalid user namespace configuration (POD mode without mappings)
-	sandboxConfig := &runtime.PodSandboxConfig{
-		Metadata: &runtime.PodSandboxMetadata{
-			Name:      "test-sandbox",
-			Uid:       "test-uid",
-			Namespace: "test-ns",
-		},
-		Linux: &runtime.LinuxPodSandboxConfig{
-			SecurityContext: &runtime.LinuxSandboxSecurityContext{
-				NamespaceOptions: &runtime.NamespaceOption{
-					UsernsOptions: &runtime.UserNamespace{
-						Mode: runtime.NamespaceMode_POD,
-						// Missing Uids and Gids - this should cause an error
-					},
-				},
-			},
-		},
-	}
-
-	labels := label.NewStore()
-	c := &criService{
-		sandboxStore: sandboxstore.NewStore(labels, nil),
-	}
-
-	sandboxID := "test-sandbox-id"
-	sandbox := sandboxstore.NewSandbox(
-		sandboxstore.Metadata{
-			ID:     sandboxID,
-			Name:   sandboxConfig.Metadata.Name,
-			Config: sandboxConfig,
-		},
-		sandboxstore.Status{},
-	)
-	c.sandboxStore.Add(sandbox)
-
-	_, err := c.getImageVolumeSnapshotOpts(ctx, sandboxID)
-	assert.Error(t, err, "expected error with invalid user namespace configuration")
-	assert.Contains(t, err.Error(), "failed to get snapshotter remap options", "error should mention remap options failure")
 }

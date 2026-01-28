@@ -25,6 +25,7 @@ import (
 
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
+	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 // addVolatileOptionOnImageVolumeMount is no-op on non-linux platforms.
@@ -46,7 +47,7 @@ func ensureImageVolumeMounted(target string) (bool, error) {
 }
 
 // getImageVolumeSnapshotOpts is no-op on non-linux platforms.
-func (c *criService) getImageVolumeSnapshotOpts(ctx context.Context, sandboxID string) ([]snapshots.Opt, error) {
+func (c *criService) getImageVolumeSnapshotOpts(ctx context.Context, extraMount *runtime.Mount) ([]snapshots.Opt, error) {
 	// User namespaces are only supported on Linux
 	return nil, nil
 }

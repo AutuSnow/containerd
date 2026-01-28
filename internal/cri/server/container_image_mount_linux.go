@@ -24,9 +24,11 @@ import (
 	"os"
 	"sync"
 
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	kernel "github.com/containerd/containerd/v2/pkg/kernelversion"
+	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 var (
@@ -94,26 +96,26 @@ func ensureImageVolumeMounted(target string) (bool, error) {
 }
 
 // getImageVolumeSnapshotOpts returns snapshot options with user namespace idmap labels
-// if the sandbox is configured to use user namespaces. This ensures that image volumes
-// work correctly with user namespaces by applying idmap to the overlay lower layers.
-func (c *criService) getImageVolumeSnapshotOpts(ctx context.Context, sandboxID string) ([]snapshots.Opt, error) {
-	// Get the sandbox configuration
-	sandbox, err := c.sandboxStore.Get(sandboxID)
+// if the mount has ID mappings configured. This ensures that image volumes work correctly
+// with user namespaces by applying idmap to the overlay lower layers.
+func (c *criService) getImageVolumeSnapshotOpts(ctx context.Context, extraMount *runtime.Mount) ([]snapshots.Opt, error) {
+	snapshotOpt := []snapshots.Opt{}
+
+	// Get UID and GID mappings from the mount message
+	uids, err := parseUsernsIDMap(extraMount.GetUidMappings())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get sandbox %q: %w", sandboxID, err)
+		return nil, fmt.Errorf("UID mapping: %w", err)
 	}
 
-	// Check if the sandbox has Linux security context configured
-	if sandbox.Config.GetLinux() == nil {
-		return nil, nil
-	}
-
-	// Get namespace options and create idmap labels if user namespace is enabled
-	nsOpts := sandbox.Config.GetLinux().GetSecurityContext().GetNamespaceOptions()
-	snapshotOpts, err := snapshotterRemapOpts(nsOpts)
+	gids, err := parseUsernsIDMap(extraMount.GetGidMappings())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get snapshotter remap options: %w", err)
+		return nil, fmt.Errorf("GID mapping: %w", err)
 	}
 
-	return snapshotOpts, nil
+	// If mappings are present, apply them to the snapshot
+	if len(uids) > 0 && len(gids) > 0 {
+		snapshotOpt = append(snapshotOpt, containerd.WithRemapperLabels(0, uids[0].HostID, 0, gids[0].HostID, uids[0].Size))
+	}
+
+	return snapshotOpt, nil
 }
